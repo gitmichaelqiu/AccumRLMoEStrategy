@@ -282,11 +282,12 @@ class TradingEnv(gym.Env):
                 reward = act * ret * 100
 
         elif self.mode == 'defensive':
+            # V6 Crisis Logic: Aggressively reward shorting during crash
             reward = act * ret * 100
-            if ret < -0.01 and act < 0.1:
-                reward += 0.5 * (1 - act)
-            elif ret < -0.02 and act > 0.5:
-                reward -= act * 20
+            if ret < -0.01 and act < -0.1:
+                reward *= 2.0  # Double profit for calling the crash
+            elif ret < -0.01 and act > 0.1:
+                reward -= (act * 10.0) # Heavy penalty for catching falling knife
             
         elif self.mode == 'recovery':
             reward = act * ret * 100
@@ -471,9 +472,21 @@ class EnsembleManager:
             }
             
             momentum = indicators['momentum']
-            
-            # V10: MOMENTUM OVERRIDE (like V8)
-            if self.config['USE_MOMENTUM_OVERRIDE'] and momentum > self.config['MOMENTUM_OVERRIDE_THRESHOLD']:
+            l_stat = data_vals[t-1, full_data.columns.get_loc('l_stat')] if 'l_stat' in full_data.columns else 0.0
+
+            # V10: PRIORITY JUMP OVERRIDE (from V6)
+            is_bullish_jump = (l_stat > self.config['JUMP_THRESHOLD'])
+            is_bearish_jump = (l_stat < -self.config['JUMP_THRESHOLD'])
+
+            if is_bearish_jump:
+                # Bearish Jump -> Force Defensive/Crisis Agent
+                final_action = self.agents['defensive'].predict(obs_raw, deterministic=True)
+                override_flag = "JUMP-"
+            elif is_bullish_jump:
+                # Bullish Jump -> Force Trend Agent
+                final_action = self.agents['trend'].predict(obs_raw, deterministic=True)
+                override_flag = "JUMP+"
+            elif self.config['USE_MOMENTUM_OVERRIDE'] and momentum > self.config['MOMENTUM_OVERRIDE_THRESHOLD']:
                 # Strong momentum -> full exposure, bypass ensemble
                 final_action = 1.0
                 override_flag = "MOM"
